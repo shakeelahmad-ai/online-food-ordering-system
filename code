@@ -1,0 +1,742 @@
+#include <iostream>
+#include <string>
+#include <iomanip>
+using namespace std;
+
+//  HELPER: intToStr (replaces to_string for older compilers)
+
+string intToStr(int n) {
+    if (n == 0) return "0";
+    string result = "";
+    bool neg = false;
+    if (n < 0) { neg = true; n = -n; }
+    while (n > 0) {
+        result = char('0' + n % 10) + result;
+        n /= 10;
+    }
+    if (neg) result = "-" + result;
+    return result;
+}
+
+
+//constants
+
+const int MAX_MENU   = 15;
+const int MAX_CART   = 10;
+const int MAX_STACK  = 100;
+const int MAX_QUEUE  = 100;
+const int MAX_PQ     = 100;
+
+//  STRUCT: MenuItem  (stored in ARRAY)
+
+struct MenuItem {
+    int    id;
+    string name;
+    string category;
+    double price;
+};
+
+//  STRUCT: CartItem  (one item inside an order)
+
+struct CartItem {
+    int    menuItemID;
+    string menuItemName;
+    int    quantity;
+    double unitPrice;
+    double subtotal;
+};
+
+//  STRUCT: Order  (holds multiple CartItems)
+
+struct Order {
+    int      orderID;
+    string   customerName;
+    string   phone;
+    CartItem items[MAX_CART];
+    int      itemCount;
+    double   subtotal;
+    double   surcharge;
+    double   totalPrice;
+    int      priority;      // 0=regular, 1-10=VIP level
+    bool     isVIP;
+    string   status;
+};
+
+//  CLASS: Stack  (Order History - LIFO)
+
+class Stack {
+private:
+    Order data[MAX_STACK];
+    int   top;
+public:
+    Stack() : top(-1) {}
+
+    bool  isEmpty()    { return top == -1; }
+    bool  isFull()     { return top == MAX_STACK - 1; }
+    int   size()       { return top + 1; }
+    int   getTop()     { return top; }
+    Order get(int i)   { return data[i]; }
+
+    void push(Order o) {
+        if (isFull()) { cout << "  [!] History stack full!\n"; return; }
+        data[++top] = o;
+    }
+
+    Order pop() {
+        if (isEmpty()) { Order e; e.orderID = -1; return e; }
+        return data[top--];
+    }
+
+    Order peek() {
+        if (isEmpty()) { Order e; e.orderID = -1; return e; }
+        return data[top];
+    }
+};
+
+//  CLASS: Queue  (Regular Orders - FIFO)
+
+class Queue {
+private:
+    Order data[MAX_QUEUE];
+    int   front, rear, count;
+public:
+    Queue() : front(0), rear(-1), count(0) {}
+
+    bool  isEmpty()    { return count == 0; }
+    bool  isFull()     { return count == MAX_QUEUE; }
+    int   size()       { return count; }
+    Order get(int i)   { return data[(front + i) % MAX_QUEUE]; }
+
+    void enqueue(Order o) {
+        if (isFull()) { cout << "  [!] Regular queue full!\n"; return; }
+        rear = (rear + 1) % MAX_QUEUE;
+        data[rear] = o;
+        count++;
+    }
+
+    Order dequeue() {
+        if (isEmpty()) { Order e; e.orderID = -1; return e; }
+        Order o = data[front];
+        front = (front + 1) % MAX_QUEUE;
+        count--;
+        return o;
+    }
+};
+
+//  CLASS: PriorityQueue  (VIP Orders - Max-Heap)
+
+class PriorityQueue {
+private:
+    Order data[MAX_PQ];
+    int   sz;
+
+    void heapifyUp(int i) {
+        while (i > 0) {
+            int p = (i - 1) / 2;
+            if (data[p].priority < data[i].priority) { swap(data[p], data[i]); i = p; }
+            else break;
+        }
+    }
+
+    void heapifyDown(int i) {
+        while (true) {
+            int largest = i, l = 2*i+1, r = 2*i+2;
+            if (l < sz && data[l].priority > data[largest].priority) largest = l;
+            if (r < sz && data[r].priority > data[largest].priority) largest = r;
+            if (largest != i) { swap(data[i], data[largest]); i = largest; }
+            else break;
+        }
+    }
+
+public:
+    PriorityQueue() : sz(0) {}
+
+    bool  isEmpty()    { return sz == 0; }
+    bool  isFull()     { return sz == MAX_PQ; }
+    int   getSize()    { return sz; }
+    Order get(int i)   { return data[i]; }
+
+    void enqueue(Order o) {
+        if (isFull()) { cout << "  [!] Priority queue full!\n"; return; }
+        data[sz] = o;
+        heapifyUp(sz++);
+    }
+
+    Order dequeue() {
+        if (isEmpty()) { Order e; e.orderID = -1; return e; }
+        Order top = data[0];
+        data[0] = data[--sz];
+        heapifyDown(0);
+        return top;
+    }
+};
+
+
+
+MenuItem      menu[MAX_MENU];
+int           menuCount    = 0;
+int           orderCounter = 1000;
+
+Stack         orderHistory;
+Queue         regularQueue;
+PriorityQueue priorityQueue;
+
+
+void line(char c = '=', int w = 64) {
+    cout << "  ";
+    for (int i = 0; i < w; i++) cout << c;
+    cout << "\n";
+}
+
+void header(const string& title) {
+    cout << "\n";
+    line('*', 62);
+    int pad = (62 - (int)title.size()) / 2;
+    cout << "  *" << string(pad - 1, ' ') << title
+         << string(62 - 1 - pad - (int)title.size(), ' ') << "*\n";
+    line('*', 62);
+}
+
+void sectionLine(const string& title) {
+    cout << "\n  +--[ " << title << " ]";
+    int rem = 55 - (int)title.size();
+    if (rem < 0) rem = 0;
+    for (int i = 0; i < rem; i++) cout << '-';
+    cout << "+\n";
+}
+
+void pressEnter() {
+    cout << "\n  Press ENTER to continue...";
+    cin.ignore();
+    cin.get();
+}
+
+//init menu (Array)
+
+void setMenuItem(MenuItem& m, int id, string name, string cat, double price) {
+    m.id = id; m.name = name; m.category = cat; m.price = price;
+}
+
+void initMenu() {
+    setMenuItem(menu[0],  1,  "Classic Chicken Burger",  "Burgers",    280.0);
+    setMenuItem(menu[1],  2,  "Beef Smash Burger",        "Burgers",    350.0);
+    setMenuItem(menu[2],  3,  "Margherita Pizza",          "Pizza",      420.0);
+    setMenuItem(menu[3],  4,  "BBQ Chicken Pizza",         "Pizza",      490.0);
+    setMenuItem(menu[4],  5,  "Chicken Shawarma",           "Wraps",      270.0);
+    setMenuItem(menu[5],  6,  "Veggie Wrap",               "Wraps",      190.0);
+    setMenuItem(menu[6],  7,  "Pasta Carbonara",           "Pasta",      360.0);
+    setMenuItem(menu[7],  8,  "Penne Arrabiata",           "Pasta",      320.0);
+    setMenuItem(menu[8],  9,  "Crispy French Fries",       "Sides",      130.0);
+    setMenuItem(menu[9],  10, "Coleslaw",                  "Sides",      100.0);
+    setMenuItem(menu[10], 11, "Mango Smoothie",            "Drinks",     160.0);
+    setMenuItem(menu[11], 12, "Cold Coffee",               "Drinks",     140.0);
+    setMenuItem(menu[12], 13, "Chocolate Brownie",         "Desserts",   210.0);
+    setMenuItem(menu[13], 14, "Vanilla Ice Cream",         "Desserts",   180.0);
+    setMenuItem(menu[14], 15, "Grilled Chicken Sandwich",  "Sandwiches", 240.0);
+    menuCount = 15;
+}
+
+//menu (categorized)
+
+void displayMenu() {
+    header("   OUR MENU   ");
+    string cats[] = {"Burgers","Pizza","Wraps","Pasta","Sides","Drinks","Desserts","Sandwiches"};
+    int numCats = 8;
+
+    for (int c = 0; c < numCats; c++) {
+        bool found = false;
+        for (int i = 0; i < menuCount; i++)
+            if (menu[i].category == cats[c]) { found = true; break; }
+        if (!found) continue;
+
+        cout << "\n  ~~~ " << cats[c] << " ~~~\n";
+        cout << "  " << string(56, '-') << "\n";
+        cout << "  " << left << setw(5) << "ID"
+             << setw(30) << "Item Name"
+             << right << setw(14) << "Price (Rs.)" << "\n";
+        cout << "  " << string(56, '-') << "\n";
+        for (int i = 0; i < menuCount; i++) {
+            if (menu[i].category != cats[c]) continue;
+            cout << "  " << left << setw(5) << menu[i].id
+                 << setw(30) << menu[i].name
+                 << right << fixed << setprecision(2) << setw(12) << menu[i].price << "\n";
+        }
+    }
+    cout << "\n  " << string(56, '=') << "\n";
+}
+
+//search or find menu item by ID
+
+int findMenuItem(int id) {
+    for (int i = 0; i < menuCount; i++)
+        if (menu[i].id == id) return i;
+    return -1;
+}
+
+//reciept
+
+void printReceipt(const Order& o) {
+    cout << "\n";
+    line('-', 56);
+    cout << "  " << string(16, ' ') << "*** ORDER RECEIPT ***\n";
+    line('-', 56);
+    cout << "  Order ID   : #" << o.orderID << "\n";
+    cout << "  Customer   :  " << o.customerName << "\n";
+    cout << "  Phone      :  " << o.phone << "\n";
+    cout << "  Type       :  " << (o.isVIP ? "VIP / PRIORITY" : "Regular") << "\n";
+    if (o.isVIP)
+        cout << "  Priority   :  Level " << o.priority << "\n";
+    line('-', 56);
+    cout << "  " << left << setw(4)  << "No."
+         << setw(24) << "Item"
+         << setw(6)  << "Qty"
+         << setw(11) << "Unit(Rs.)"
+         << right << setw(10) << "Sub(Rs.)" << "\n";
+    line('-', 56);
+    for (int i = 0; i < o.itemCount; i++) {
+        const CartItem& ci = o.items[i];
+        cout << "  " << left << setw(4)  << (i+1)
+             << setw(24) << ci.menuItemName
+             << setw(6)  << ci.quantity
+             << setw(11) << fixed << setprecision(2) << ci.unitPrice
+             << right << setw(10) << fixed << setprecision(2) << ci.subtotal << "\n";
+    }
+    line('-', 56);
+    cout << right;
+    cout << "  " << setw(46) << "Subtotal :"
+         << " Rs." << setw(8) << fixed << setprecision(2) << o.subtotal << "\n";
+    if (o.isVIP)
+        cout << "  " << setw(46) << "VIP Surcharge :"
+             << " Rs." << setw(8) << fixed << setprecision(2) << o.surcharge << "\n";
+    cout << "  " << string(56, '-') << "\n";
+    cout << "  " << setw(46) << "GRAND TOTAL :"
+         << " Rs." << setw(8) << fixed << setprecision(2) << o.totalPrice << "\n";
+    line('=', 56);
+    cout << "  " << string(12, ' ') << "Thank you for ordering with us!\n";
+    line('=', 56);
+}
+
+// building cart (multiple items)
+
+int buildCart(CartItem items[], double& subtotal) {
+    int  count = 0;
+    subtotal   = 0.0;
+
+    cout << "\n  [CART] You can add up to " << MAX_CART << " different items.\n";
+    cout << "  Enter 0 as Item ID when done.\n";
+
+    while (true) {
+        if (count >= MAX_CART) {
+            cout << "  [!] Cart is full.\n"; break;
+        }
+
+        displayMenu();
+
+        int id;
+        cout << "\n  Enter Item ID (0 = done): ";
+        cin >> id;
+        if (id == 0) break;
+
+        int idx = findMenuItem(id);
+        if (idx == -1) { cout << "  [!] Invalid ID. Try again.\n"; continue; }
+
+        int qty;
+        cout << "  Enter Quantity        : ";
+        cin >> qty;
+        if (qty <= 0) { cout << "  [!] Quantity must be >= 1.\n"; continue; }
+
+        // If already in cart, update quantity
+        bool merged = false;
+        for (int i = 0; i < count; i++) {
+            if (items[i].menuItemID == menu[idx].id) {
+                items[i].quantity += qty;
+                items[i].subtotal  = items[i].quantity * items[i].unitPrice;
+                subtotal          += qty * menu[idx].price;
+                cout << "  [+] Updated -> " << menu[idx].name
+                     << " x" << items[i].quantity << "\n";
+                merged = true;
+                break;
+            }
+        }
+
+        if (!merged) {
+            items[count].menuItemID   = menu[idx].id;
+            items[count].menuItemName = menu[idx].name;
+            items[count].quantity     = qty;
+            items[count].unitPrice    = menu[idx].price;
+            items[count].subtotal     = qty * menu[idx].price;
+            subtotal                 += items[count].subtotal;
+            cout << "  [+] Added -> " << menu[idx].name
+                 << " x" << qty << "  (Rs."
+                 << fixed << setprecision(2) << items[count].subtotal << ")\n";
+            count++;
+        }
+
+        // Show live cart
+        cout << "\n  +-------------- Your Cart So Far -----+--------------\n";
+        for (int i = 0; i < count; i++) {
+            cout << "  | " << (i+1) << ". " << left << setw(22) << items[i].menuItemName
+                 << " x" << items[i].quantity
+                 << "  Rs." << fixed << setprecision(2) << items[i].subtotal << "\n";
+        }
+        cout << "  | " << right << setw(30) << "Subtotal: Rs."
+             << fixed << setprecision(2) << subtotal << "\n";
+        cout << "  +------------------------------------------------------+\n";
+
+        if (count < MAX_CART) {
+            char more;
+            cout << "  Add more items? (y/n): ";
+            cin >> more;
+            if (more != 'y' && more != 'Y') break;
+        }
+    }
+    return count;
+}
+
+//place Regular Order
+
+
+void placeRegularOrder() {
+    header("  PLACE REGULAR ORDER  ");
+
+    string name, phone;
+    cout << "\n  Enter Your Name  : ";
+    cin.ignore();
+    getline(cin, name);
+    cout << "  Enter Phone No.  : ";
+    getline(cin, phone);
+
+    CartItem items[MAX_CART];
+    double   subtotal = 0.0;
+    int      count    = buildCart(items, subtotal);
+
+    if (count == 0) {
+        cout << "\n  [!] No items added. Order cancelled.\n";
+        pressEnter();
+        return;
+    }
+
+    Order o;
+    o.orderID      = ++orderCounter;
+    o.customerName = name;
+    o.phone        = phone;
+    o.itemCount    = count;
+    o.subtotal     = subtotal;
+    o.surcharge    = 0.0;
+    o.totalPrice   = subtotal;
+    o.priority     = 0;
+    o.isVIP        = false;
+    o.status       = "Pending";
+    for (int i = 0; i < count; i++) o.items[i] = items[i];
+
+    regularQueue.enqueue(o);
+    orderHistory.push(o);
+
+    cout << "\n  >> Added to REGULAR queue (FIFO - first come, first served)\n";
+    printReceipt(o);
+    pressEnter();
+}
+
+//place VIP / Priority Order
+
+void placeVIPOrder() {
+    header("  VIP / PRIORITY ORDER  ");
+    cout << "\n \n";
+    cout << "     Pay more  -->  Get served FASTER!       \n";
+    cout << "     Surcharge = Priority Level x 10%        \n";
+    cout << "     Level 10 = served IMMEDIATELY           \n";
+    
+
+    string name, phone;
+    cout << "\n  Enter Your Name  : ";
+    cin.ignore();
+    getline(cin, name);
+    cout << "  Enter Phone No.  : ";
+    getline(cin, phone);
+
+    CartItem items[MAX_CART];
+    double   subtotal = 0.0;
+    int      count    = buildCart(items, subtotal);
+
+    if (count == 0) {
+        cout << "\n  [!] No items added. Order cancelled.\n";
+        pressEnter();
+        return;
+    }
+
+    int priorityLevel;
+    cout << "\n  Select Priority Level:\n";
+    cout << "   [1-3]  Low    (+10% to +30% surcharge)\n";
+    cout << "   [4-6]  Medium (+40% to +60% surcharge)\n";
+    cout << "   [7-9]  High   (+70% to +90% surcharge)\n";
+    cout << "   [10]   URGENT (+100% surcharge - Top of queue!)\n";
+    cout << "  Enter Level (1-10): ";
+    cin >> priorityLevel;
+    if (priorityLevel < 1)  priorityLevel = 1;
+    if (priorityLevel > 10) priorityLevel = 10;
+
+    double surcharge = subtotal * (priorityLevel * 0.10);
+    double total     = subtotal + surcharge;
+
+    cout << "\n  +------------------- VIP Pricing Breakdown --------------------+\n";
+    cout << "   Subtotal     : Rs." << left << setw(16) << fixed << setprecision(2) << subtotal  << "|\n";
+    cout << "   Surcharge    : Rs." << setw(16) << fixed << setprecision(2) << surcharge << "\n";
+    cout << "   TOTAL        : Rs." << setw(16) << fixed << setprecision(2) << total     << "\n";
+    cout << "   Priority     : Level " << setw(13) << priorityLevel << "\n";
+    cout << "\n  +--------------------------------------------------------------+\n";
+    
+
+    char confirm;
+    cout << "\n  Confirm VIP Order? (y/n): ";
+    cin >> confirm;
+    if (confirm != 'y' && confirm != 'Y') {
+        cout << "  Order cancelled.\n";
+        pressEnter();
+        return;
+    }
+
+    Order o;
+    o.orderID      = ++orderCounter;
+    o.customerName = name;
+    o.phone        = phone;
+    o.itemCount    = count;
+    o.subtotal     = subtotal;
+    o.surcharge    = surcharge;
+    o.totalPrice   = total;
+    o.priority     = priorityLevel;
+    o.isVIP        = true;
+    o.status       = "Pending";
+    for (int i = 0; i < count; i++) o.items[i] = items[i];
+
+    priorityQueue.enqueue(o);
+    orderHistory.push(o);
+
+    cout << "\n  >> Added to PRIORITY queue (Level " << priorityLevel << ")\n";
+    printReceipt(o);
+    pressEnter();
+}
+
+
+//process next order (VIP first and then Regular)
+
+void processNextOrder() {
+    header("  KITCHEN - PROCESS NEXT ORDER  ");
+    Order o;
+
+    if (!priorityQueue.isEmpty()) {
+        cout << "\n  [KITCHEN] Serving TOP PRIORITY order...\n";
+        o = priorityQueue.dequeue();
+    } else if (!regularQueue.isEmpty()) {
+        cout << "\n  [KITCHEN] Serving next REGULAR order...\n";
+        o = regularQueue.dequeue();
+    } else {
+        cout << "\n  [KITCHEN] No orders pending right now!\n";
+        pressEnter();
+        return;
+    }
+
+    o.status = "Served";
+    cout << "  *** ORDER SERVED SUCCESSFULLY! ***\n";
+    printReceipt(o);
+    pressEnter();
+}
+
+//view pemding orders
+
+void viewPendingOrders() {
+    header("  PENDING ORDERS  ");
+
+    sectionLine("VIP / PRIORITY QUEUE");
+    if (priorityQueue.isEmpty()) {
+        cout << "  (No VIP orders pending)\n";
+    } else {
+        int sz = priorityQueue.getSize();
+        Order temp[MAX_PQ];
+        for (int i = 0; i < sz; i++) temp[i] = priorityQueue.get(i);
+        for (int i = 0; i < sz-1; i++)
+            for (int j = i+1; j < sz; j++)
+                if (temp[j].priority > temp[i].priority) swap(temp[i], temp[j]);
+
+        cout << "  " << left  << setw(9)  << "Order#"
+             << setw(20) << "Customer"
+             << setw(7)  << "Items"
+             << setw(14) << "Total(Rs.)"
+             << setw(10) << "Priority" << "\n";
+        cout << "  " << string(58, '-') << "\n";
+        for (int i = 0; i < sz; i++) {
+            cout << "  " << left << setw(9)  << ("#" + intToStr(temp[i].orderID))
+                 << setw(20) << temp[i].customerName
+                 << setw(7)  << temp[i].itemCount
+                 << setw(14) << fixed << setprecision(2) << temp[i].totalPrice
+                 << "  Level " << temp[i].priority << "\n";
+        }
+    }
+
+    sectionLine("REGULAR QUEUE (FIFO)");
+    if (regularQueue.isEmpty()) {
+        cout << "  (No regular orders pending)\n";
+    } else {
+        cout << "  " << left << setw(9)  << "Order#"
+             << setw(20) << "Customer"
+             << setw(7)  << "Items"
+             << setw(14) << "Total(Rs.)" << "\n";
+        cout << "  " << string(50, '-') << "\n";
+        for (int i = 0; i < regularQueue.size(); i++) {
+            Order o = regularQueue.get(i);
+            cout << "  " << left << setw(9)  << ("#" + intToStr(o.orderID))
+                 << setw(20) << o.customerName
+                 << setw(7)  << o.itemCount
+                 << setw(14) << fixed << setprecision(2) << o.totalPrice << "\n";
+        }
+    }
+
+    pressEnter();
+}
+
+//veiw order history (Stack - LIFO)
+
+void viewOrderHistory() {
+    header("  ORDER HISTORY  (Stack - Latest First)  ");
+
+    if (orderHistory.isEmpty()) {
+        cout << "\n  No orders placed yet.\n";
+        pressEnter();
+        return;
+    }
+
+    cout << "\n  " << left << setw(9)  << "Order#"
+         << setw(20) << "Customer"
+         << setw(7)  << "Items"
+         << setw(14) << "Total(Rs.)"
+         << setw(12) << "Type" << "\n";
+    cout << "  " << string(60, '-') << "\n";
+    for (int i = orderHistory.getTop(); i >= 0; i--) {
+        Order o   = orderHistory.get(i);
+        string tp = o.isVIP ? ("VIP Lv." + intToStr(o.priority)) : "Regular";
+        cout << "  " << left << setw(9)  << ("#" + intToStr(o.orderID))
+             << setw(20) << o.customerName
+             << setw(7)  << o.itemCount
+             << setw(14) << fixed << setprecision(2) << o.totalPrice
+             << setw(12) << tp << "\n";
+    }
+    cout << "  " << string(60, '=') << "\n";
+    pressEnter();
+}
+
+//view last order(stack peek)
+
+void viewLastOrder() {
+    header("  LAST ORDER PLACED  ");
+    Order o = orderHistory.peek();
+    if (o.orderID == -1)
+        cout << "\n  No orders placed yet.\n";
+    else
+        printReceipt(o);
+    pressEnter();
+}
+
+//statistics
+
+void viewStats() {
+    header("  SYSTEM STATISTICS  ");
+    cout << "\n";
+    cout << "  |  Total Orders Placed       :  "
+         << left << setw(18) << (orderCounter - 1000) << "|\n";
+    cout << "  |  Orders in History (Stack) :  "
+         << setw(18) << orderHistory.size() << "|\n";
+    cout << "  |  Regular Queue (Pending)   :  "
+         << setw(18) << regularQueue.size() << "|\n";
+    cout << "  |  VIP Queue (Pending)       :  "
+         << setw(18) << priorityQueue.getSize() << "|\n";
+    pressEnter();
+}
+
+//splash screen
+
+void splashScreen() {
+    cout << "\n\n";
+    cout << "  +============================================================+\n";
+    cout << "  |                                                            |\n";
+    cout << "  |          WELCOME TO   S.FOODIES                            |\n";
+    cout << "  |             Online Food Ordering System                    |\n";
+    cout << "  |                                                            |\n";
+    cout << "  |         Fast  .  Fresh  .  Delivered to You                |\n";
+    cout << "  |                                                            |\n";
+    cout << "  |   DSA Project  |  C++                                      |\n";
+    cout << "  |   Structures: Array | Stack | Queue | Priority Queue       |\n";
+    cout << "  |                                                            |\n";
+    cout << "  +============================================================+\n\n";
+    pressEnter();
+}
+
+//main manu
+
+void showMainMenu() {
+    cout << "\n";
+    cout << "  +============================================================+\n";
+    cout << "  |              S.FOODIES --  MAIN MENU                       |\n";   
+    cout << "  +============================================================+\n";
+    cout << "                                                              \n";
+    cout << "     ORDERING                                                 \n";
+    cout << "       [1]  Place Regular Order                  \n";
+    cout << "       [2]  Place VIP / Priority Order       \n";
+    cout << "                                                              \n";
+    cout << "     KITCHEN                                                  \n";
+    cout << "       [3]  Process Next Order               \n";
+    cout << "                                                              \n";
+    cout << "     TRACKING                                                 \n";
+    cout << "       [4]  View All Pending Orders                          \n";
+    cout << "       [5]  View Order History                 \n";
+    cout << "       [6]  View Last Order Placed               \n";
+    cout << "       [7]  System Statistics                                \n";
+    cout << "                                                             \n";
+    cout << "    OTHER                                                    \n";
+    cout << "       [8]  Display Full Menu                                \n";
+    cout << "       [0]  Exit                                             \n";
+    cout << "                                                              \n";
+    cout << "  ";
+    cout << "    Regular Queue: " << setw(3) << regularQueue.size()
+         << "    VIP Queue: "     << setw(3) << priorityQueue.getSize()
+         << "   History: "       << setw(3) << orderHistory.size()
+         << "                    \n";
+    cout << "  \n";
+    cout << "  Enter choice: ";
+}
+
+//main
+
+int main() {
+    initMenu();
+    splashScreen();
+
+    int choice;
+    do {
+        showMainMenu();
+        cin >> choice;
+
+        switch (choice) {
+            case 1: placeRegularOrder(); break;
+            case 2: placeVIPOrder();     break;
+            case 3: processNextOrder();  break;
+            case 4: viewPendingOrders(); break;
+            case 5: viewOrderHistory();  break;
+            case 6: viewLastOrder();     break;
+            case 7: viewStats();         break;
+            case 8:
+                displayMenu();
+                pressEnter();
+                break;
+            case 0:
+                cout << "\n+--------------------------------------------+\n";
+                cout << "  |    Thank you for using S.FOODIES!          |\n";
+                cout << "  |    Goodbye and come back soon!             |\n";
+                cout << "  +--------------------------------------------+\n\n";
+                break;
+            default:
+                cout << "\n  [!] Invalid choice. Try again.\n";
+        }
+
+    } while (choice != 0);
+
+    return 0;
+}
